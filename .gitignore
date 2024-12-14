@@ -1,0 +1,12 @@
+*.dll
+*.so
+*.dylib
+*.test
+rabbit-connect
+*.out
+.env
+.glide/
+.idea/
+logs/
+bin/
+
