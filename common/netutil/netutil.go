@@ -6,6 +6,7 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/songgao/water/waterutil"
 	"log"
+	"net"
 )
 
 func GetAddr(b []byte) (srcAddr string, dstAddr string) {
@@ -50,4 +51,12 @@ func GetPort(b []byte) (srcPort string, dstPort string) {
 		return udp.SrcPort.String(), udp.DstPort.String()
 	}
 	return "", ""
+}
+
+func IsInNetwork(ip net.IP, network string) bool {
+	_, subnet, err := net.ParseCIDR(network)
+	if err != nil {
+		return false
+	}
+	return subnet.Contains(ip)
 }

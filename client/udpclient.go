@@ -1,3 +1,4 @@
+// client/udpclient.go
 package client
 
 import (
@@ -10,7 +11,6 @@ import (
 	"github.com/songgao/water/waterutil"
 )
 
-// StartUDPClient start udp client
 func StartUDPClient(config config.Config) {
 	config.Init()
 	iface := tun.CreateTun(config.CIDR)
@@ -27,9 +27,9 @@ func StartUDPClient(config config.Config) {
 		log.Fatalln("failed to listen on UDP socket:", err)
 	}
 	defer conn.Close()
-	log.Printf("go-vpn udp client started on %v, CIDR is %v", config.LocalAddr, config.CIDR)
+	log.Printf("rabbit-connect udp client started on %v, CIDR is %v", config.LocalAddr, config.CIDR)
 
-	// read data from server
+	// Handle incoming packets from server
 	go func() {
 		buf := make([]byte, 1500)
 		for {
@@ -37,17 +37,19 @@ func StartUDPClient(config config.Config) {
 			if err != nil || n == 0 {
 				continue
 			}
-			// decrypt data
 			b := cipher.Decrypt(buf[:n])
 			if !waterutil.IsIPv4(b) {
 				continue
 			}
-			// Forward all IPv4 packets to the TUN interface
-			iface.Write(b)
+			// Write all decrypted packets to TUN interface
+			_, err = iface.Write(b)
+			if err != nil {
+				log.Printf("Error writing to TUN: %v", err)
+			}
 		}
 	}()
 
-	// read data from tun
+	// Handle outgoing packets
 	packet := make([]byte, 1500)
 	for {
 		n, err := iface.Read(packet)
@@ -58,8 +60,12 @@ func StartUDPClient(config config.Config) {
 		if !waterutil.IsIPv4(b) {
 			continue
 		}
-		// Forward all IPv4 packets to the server
+
+		// Encrypt and send all IPv4 packets to server
 		b = cipher.Encrypt(b)
-		_, _ = conn.WriteToUDP(b, serverAddr)
+		_, err = conn.WriteToUDP(b, serverAddr)
+		if err != nil {
+			log.Printf("Error sending to server: %v", err)
+		}
 	}
 }

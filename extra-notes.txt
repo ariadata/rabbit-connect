@@ -67,9 +67,7 @@ systemctl stop rabbit-connect && netfilter-persistent flush && iptables-save && 
 
 systemctl restart rabbit-connect && sleep 2 && systemctl status rabbit-connect && ping -c 2 172.16.0.1
 
-iptables -t nat -A POSTROUTING -j MASQUERADE
-iptables -A FORWARD -i rabbit-connect -j ACCEPT
-iptables -A FORWARD -o rabbit-connect -j ACCEPT
+iptables -t nat -A POSTROUTING -j MASQUERADE && iptables -A FORWARD -i rabbit-connect -j ACCEPT && iptables -A FORWARD -o rabbit-connect -j ACCEPT
 
 Home:
 ip route add 192.168.100.0/24 via 172.16.0.100 dev rabbit-connect

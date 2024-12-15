@@ -1,3 +1,4 @@
+// server/udpserver.go
 package server
 
 import (
@@ -15,7 +16,7 @@ import (
 
 type Forwarder struct {
 	localConn *net.UDPConn
-	connCache *cache.Cache
+	connCache *cache.Cache // Maps IP to client UDP address
 }
 
 func StartUDPServer(config config.Config) {
@@ -30,7 +31,6 @@ func StartUDPServer(config config.Config) {
 		log.Fatalln("failed to listen on UDP socket:", err)
 	}
 	defer conn.Close()
-	log.Printf("rabbit-connect udp server started on %v, CIDR is %v", config.LocalAddr, config.CIDR)
 
 	forwarder := &Forwarder{
 		localConn: conn,
@@ -51,12 +51,20 @@ func StartUDPServer(config config.Config) {
 			continue
 		}
 
-		// Write packet to TUN interface
-		iface.Write(b)
+		// Get source and destination IPs
+		srcIP := waterutil.IPv4Source(b)
+		dstIP := waterutil.IPv4Destination(b)
 
-		// Cache the client's address based on source IP for return traffic
-		srcIP := waterutil.IPv4Source(b).String()
-		forwarder.connCache.Set(srcIP, cliAddr, cache.DefaultExpiration)
+		log.Printf("Received packet: src=%v dst=%v", srcIP, dstIP)
+
+		// Update client address mapping
+		forwarder.connCache.Set(srcIP.String(), cliAddr, cache.DefaultExpiration)
+
+		// Write to TUN interface
+		_, err = iface.Write(b)
+		if err != nil {
+			log.Printf("Error writing to TUN: %v", err)
+		}
 	}
 }
 
@@ -72,13 +80,43 @@ func (f *Forwarder) forward(iface *water.Interface) {
 			continue
 		}
 
-		// Get the destination IP to determine which client to send to
-		dstIP := waterutil.IPv4Destination(b).String()
+		srcIP := waterutil.IPv4Source(b)
+		dstIP := waterutil.IPv4Destination(b)
 
-		// Find the client that owns this destination IP range
-		if clientAddr, found := f.connCache.Get(dstIP); found {
-			b = cipher.Encrypt(b)
-			_, _ = f.localConn.WriteToUDP(b, clientAddr.(*net.UDPAddr))
+		log.Printf("Forwarding packet: src=%v dst=%v", srcIP, dstIP)
+
+		// Find the right VPN client to forward to
+		// This might be either the direct destination IP (for VPN IPs)
+		// or the VPN IP that routes to this destination network
+		var foundClient *net.UDPAddr
+
+		// First try direct VPN IP match
+		if client, exists := f.connCache.Get(dstIP.String()); exists {
+			if addr, ok := client.(*net.UDPAddr); ok {
+				foundClient = addr
+				log.Printf("Found direct route to VPN IP %v", dstIP)
+			}
+		}
+
+		// If no direct match, check all connected clients
+		if foundClient == nil {
+			for _, item := range f.connCache.Items() {
+				if addr, ok := item.Object.(*net.UDPAddr); ok {
+					foundClient = addr
+					log.Printf("Using client %v for routing", addr)
+					break
+				}
+			}
+		}
+
+		if foundClient != nil {
+			encrypted := cipher.Encrypt(b)
+			_, err = f.localConn.WriteToUDP(encrypted, foundClient)
+			if err != nil {
+				log.Printf("Error forwarding to %v: %v", foundClient, err)
+			}
+		} else {
+			log.Printf("No route found for destination %v", dstIP)
 		}
 	}
 }
