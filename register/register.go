@@ -4,38 +4,100 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/patrickmn/go-cache"
 )
 
+type ClientInfo struct {
+	IP       string
+	Subnets  []string
+	Count    int
+	LastSeen time.Time
+}
+
 var _register *cache.Cache
+var _routeMap sync.Map // maps subnet to client IP
 
 func init() {
 	_register = cache.New(30*time.Minute, 3*time.Minute)
 }
 
+// AddClientIP adds a client IP to the registry
 func AddClientIP(ip string) {
-	_register.Add(ip, 0, cache.DefaultExpiration)
+	info := &ClientInfo{
+		IP:       ip,
+		Subnets:  []string{},
+		Count:    0,
+		LastSeen: time.Now(),
+	}
+	_register.Add(ip, info, cache.DefaultExpiration)
 }
 
+// DeleteClientIP removes a client IP from the registry
 func DeleteClientIP(ip string) {
+	if info, ok := getClientInfo(ip); ok {
+		// Remove subnet mappings
+		for _, subnet := range info.Subnets {
+			_routeMap.Delete(subnet)
+		}
+	}
 	_register.Delete(ip)
 }
 
+// ExistClientIP checks if a client IP exists
 func ExistClientIP(ip string) bool {
 	_, ok := _register.Get(ip)
 	return ok
 }
 
+// AddClientSubnet adds a subnet that a client can route to
+func AddClientSubnet(clientIP string, subnet string) bool {
+	if info, ok := getClientInfo(clientIP); ok {
+		// Check if subnet is valid
+		_, _, err := net.ParseCIDR(subnet)
+		if err != nil {
+			return false
+		}
+
+		// Add subnet to client info
+		for _, existing := range info.Subnets {
+			if existing == subnet {
+				return true // Already exists
+			}
+		}
+		info.Subnets = append(info.Subnets, subnet)
+		info.LastSeen = time.Now()
+		_register.Set(clientIP, info, cache.DefaultExpiration)
+
+		// Add to route map
+		_routeMap.Store(subnet, clientIP)
+		return true
+	}
+	return false
+}
+
+// GetRouteForSubnet finds which client can route to a given subnet
+func GetRouteForSubnet(subnet string) (string, bool) {
+	if clientIP, ok := _routeMap.Load(subnet); ok {
+		return clientIP.(string), true
+	}
+	return "", false
+}
+
+// KeepAliveClientIP updates the last seen time for a client
 func KeepAliveClientIP(ip string) {
-	if ExistClientIP(ip) {
-		_register.Increment(ip, 1)
+	if info, ok := getClientInfo(ip); ok {
+		info.Count++
+		info.LastSeen = time.Now()
+		_register.Set(ip, info, cache.DefaultExpiration)
 	} else {
 		AddClientIP(ip)
 	}
 }
 
+// PickClientIP allocates a new client IP from the CIDR range
 func PickClientIP(cidr string) (clientIP string, prefixLength string) {
 	ip, ipNet, err := net.ParseCIDR(cidr)
 	if err != nil {
@@ -59,12 +121,36 @@ func PickClientIP(cidr string) (clientIP string, prefixLength string) {
 	return "", ""
 }
 
+// ListClientIP returns all registered client IPs
 func ListClientIP() []string {
-	result := []string{}
-	for k := range _register.Items() {
-		result = append(result, k)
+	var result []string
+	for k, v := range _register.Items() {
+		if info, ok := v.Object.(*ClientInfo); ok {
+			result = append(result, k+" (subnets: "+strings.Join(info.Subnets, ", ")+")")
+		} else {
+			result = append(result, k)
+		}
 	}
 	return result
+}
+
+// ListClientSubnets returns all subnets registered for a client
+func ListClientSubnets(clientIP string) []string {
+	if info, ok := getClientInfo(clientIP); ok {
+		return info.Subnets
+	}
+	return nil
+}
+
+// Helper functions
+
+func getClientInfo(ip string) (*ClientInfo, bool) {
+	if val, ok := _register.Get(ip); ok {
+		if info, ok := val.(*ClientInfo); ok {
+			return info, true
+		}
+	}
+	return nil, false
 }
 
 func addressCount(network *net.IPNet) uint64 {

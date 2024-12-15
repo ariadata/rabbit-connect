@@ -27,7 +27,8 @@ func StartUDPClient(config config.Config) {
 		log.Fatalln("failed to listen on UDP socket:", err)
 	}
 	defer conn.Close()
-	log.Printf("rabbit-connect udp client started on %v,CIDR is %v", config.LocalAddr, config.CIDR)
+	log.Printf("go-vpn udp client started on %v, CIDR is %v", config.LocalAddr, config.CIDR)
+
 	// read data from server
 	go func() {
 		buf := make([]byte, 1500)
@@ -41,9 +42,11 @@ func StartUDPClient(config config.Config) {
 			if !waterutil.IsIPv4(b) {
 				continue
 			}
+			// Forward all IPv4 packets to the TUN interface
 			iface.Write(b)
 		}
 	}()
+
 	// read data from tun
 	packet := make([]byte, 1500)
 	for {
@@ -51,11 +54,12 @@ func StartUDPClient(config config.Config) {
 		if err != nil || n == 0 {
 			continue
 		}
-		if !waterutil.IsIPv4(packet) {
+		b := packet[:n]
+		if !waterutil.IsIPv4(b) {
 			continue
 		}
-		// encrypt data
-		b := cipher.Encrypt(packet[:n])
-		conn.WriteToUDP(b, serverAddr)
+		// Forward all IPv4 packets to the server
+		b = cipher.Encrypt(b)
+		_, _ = conn.WriteToUDP(b, serverAddr)
 	}
 }

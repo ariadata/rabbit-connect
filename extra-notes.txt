@@ -1,0 +1,80 @@
+systemctl daemon-reload
+systemctl restart rabbit-connect
+
+
+killall rabbit-connect && systemctl stop rabbit-connect
+systemctl start rabbit-connect && systemctl status rabbit-connect
+
+
+
+systemctl restart rabbit-connect
+
+################################
+systemctl restart rabbit-connect && \
+sleep 2 && \
+systemctl status rabbit-connect && \
+ping -c 2 172.16.0.1
+
+
+Need to see from home (192.168.2.4) :
+ping 172.16.0.100
+ping 192.168.100.102
+ping 192.168.100.1
+
+
+Need to see from office (192.168.100.102):
+ping 172.16.0.2
+ping 192.168.2.4
+ping 192.168.2.1
+
+----------------------------------------------------------------------------
+# Server Side:
+iptables -t nat -A POSTROUTING -j MASQUERADE
+iptables -A FORWARD -i rabbit-connect -j ACCEPT
+iptables -A FORWARD -o rabbit-connect -j ACCEPT
+----------------------------------------------------------------------------
+# Home Side:
+sysctl -w net.ipv4.ip_forward=1
+
+iptables -t nat -A POSTROUTING -s 192.168.2.0/23 -o rabbit-connect -j MASQUERADE
+iptables -A FORWARD -i rabbit-connect -j ACCEPT
+iptables -A FORWARD -o rabbit-connect -j ACCEPT
+ip route add 192.168.100.0/24 dev rabbit-connect
+Or:
+iptables -t nat -A POSTROUTING -j MASQUERADE
+iptables -A FORWARD -i rabbit-connect -j ACCEPT
+iptables -A FORWARD -o rabbit-connect -j ACCEPT
+ip route add 192.168.100.0/24 via 172.16.0.1 dev rabbit-connect
+----------------------------------------------------------------------------
+# Office Side
+sysctl -w net.ipv4.ip_forward=1
+
+iptables -t nat -A POSTROUTING -s 192.168.100.0/24 -o rabbit-connect -j MASQUERADE
+iptables -A FORWARD -i rabbit-connect -j ACCEPT
+iptables -A FORWARD -o rabbit-connect -j ACCEPT
+ip route add 192.168.2.0/23 dev rabbit-connect
+Or:
+iptables -t nat -A POSTROUTING -j MASQUERADE
+iptables -A FORWARD -i rabbit-connect -j ACCEPT
+iptables -A FORWARD -o rabbit-connect -j ACCEPT
+ip route add 192.168.2.0/23 via 172.16.0.1 dev rabbit-connect
+
+
+
+
+Flush:
+systemctl stop rabbit-connect && netfilter-persistent flush && iptables-save && ip route
+
+systemctl restart rabbit-connect && sleep 2 && systemctl status rabbit-connect && ping -c 2 172.16.0.1
+
+iptables -t nat -A POSTROUTING -j MASQUERADE
+iptables -A FORWARD -i rabbit-connect -j ACCEPT
+iptables -A FORWARD -o rabbit-connect -j ACCEPT
+
+Home:
+ip route add 192.168.100.0/24 via 172.16.0.100 dev rabbit-connect
+
+Office: 
+ip route add 192.168.2.0/23 via 172.16.0.2 dev rabbit-connect
+
+
